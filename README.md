@@ -60,12 +60,18 @@ service isn't installed, the app starts the background process itself.
 
 ## Notes
 
-- **HomePod access**: HomePods and Apple TVs reject AirPlay from the
-  computer (`RTSP/1.0 403 Forbidden`) unless the Home allows it. In the Home
-  app, go to Home Settings › Speakers & TV › Allow Speaker & TV Access, choose
-  "Anyone on the Same Network", and leave "Require Password" off. Roomcast
-  checks every speaker with a single RTSP `OPTIONS` request (which doesn't
-  interrupt playback) and flags any that refuse.
+- **HomePods and the User-Agent**: HomePods answer `403 Forbidden` to any
+  AirPlay sender whose `User-Agent` isn't an Apple one, and PipeWire's RAOP
+  module always sends `PipeWire/<version>`. At startup the service copies
+  that one module into `$XDG_RUNTIME_DIR/roomcast/modules`, swaps the string
+  for an `iTunes/…` one of the same length, and runs discovery with
+  `PIPEWIRE_MODULE_DIR` pointing there. Every other module is a symlink to
+  the system copy, and the system files stay untouched.
+- **Home access setting**: the Home app's Home Settings › Speakers & TV ›
+  Allow Speaker & TV Access must be "Everyone" or "Anyone on the Same
+  Network", with "Require Password" off. Roomcast checks each speaker with
+  one RTSP `OPTIONS` request, which doesn't interrupt playback, and flags
+  any that refuse.
 - **HomePod hardware pairs** can only be made in Apple's Home app; Apple has
   no public API for it. Roomcast pairs do the same job from the computer and
   leave your Home setup unchanged.

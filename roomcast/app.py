@@ -223,7 +223,7 @@ class Window(Adw.ApplicationWindow):
             return None
         state = self.access.get(spk.ip)
         if state == ACCESS_FORBIDDEN:
-            return "Blocked by Home app access setting"
+            return "Refused AirPlay from this computer"
         if state == ACCESS_PASSWORD:
             return "Needs an AirPlay password"
         return None
@@ -236,11 +236,11 @@ class Window(Adw.ApplicationWindow):
         group = self.add_group(page, Adw.PreferencesGroup())
         row = ActionRow(
             title="Some speakers are refusing this computer",
-            subtitle=f"{names} only accept AirPlay from people in your Apple Home. To fix it, "
-            "open the Home app on an iPhone, iPad or Mac and go to Home Settings › "
-            "Speakers & TV › Allow Speaker & TV Access, then choose “Anyone on the Same "
-            "Network”. Leave “Require Password” off. Roomcast notices the change within "
-            "about 15 seconds.",
+            subtitle=f"{names} refused AirPlay from this computer. Check that the Home app's "
+            "Home Settings › Speakers & TV › Allow Speaker & TV Access is “Everyone” or "
+            "“Anyone on the Same Network”, with “Require Password” off. If it already is, "
+            "choose Restart Background Service from the main menu. Roomcast rechecks "
+            "every 15 seconds.",
         )
         icon = Gtk.Image(icon_name="dialog-warning-symbolic", valign=Gtk.Align.START, margin_top=12)
         icon.add_css_class("warning")

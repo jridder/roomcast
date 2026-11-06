@@ -61,11 +61,21 @@ def probe_access(ip: str, port: int = 7000) -> str | None:
     sender makes. It doesn't start playback or interrupt the speaker.
     Blocking; run it in a worker thread.
     """
+    import os
     import socket
+    from pathlib import Path
 
+    # Use the same User-Agent the AirPlay module will send (see daemon.py):
+    # HomePods accept or refuse based on it.
+    agent = "PipeWire"
+    try:
+        runtime = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "roomcast"
+        agent = (runtime / "user-agent").read_text().strip() or agent
+    except OSError:
+        pass
     try:
         with socket.create_connection((ip, port), timeout=3) as s:
-            s.sendall(b"OPTIONS * RTSP/1.0\r\nCSeq: 1\r\nUser-Agent: Roomcast\r\n\r\n")
+            s.sendall(f"OPTIONS * RTSP/1.0\r\nCSeq: 1\r\nUser-Agent: {agent}\r\n\r\n".encode())
             s.settimeout(3)
             status = s.recv(512).decode(errors="replace").split("\r\n", 1)[0]
     except OSError:
