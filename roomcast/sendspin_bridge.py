@@ -23,7 +23,7 @@ import re
 import signal
 import sys
 
-from aiosendspin.models.types import ConnectionReason
+from aiosendspin.models.types import ConnectionReason, PlayerCommand
 from aiosendspin.noise import Identity, InMemoryServerPairingStore
 from aiosendspin.server import (
     AudioFormat,
@@ -75,6 +75,9 @@ class Speaker:
         self.capture: asyncio.subprocess.Process | None = None
         self.task: asyncio.Task | None = None
         self.stream = None
+        self.hw_volume = False  # slider drives the speaker's own volume
+        self.last_dev: int | None = None
+        self.last_sink: float | None = None
 
     @property
     def sink_name(self) -> str:
@@ -86,6 +89,17 @@ class Speaker:
         c = self.bridge.server.get_client(self.client_id)
         return c if c is not None and c.connection is not None else None
 
+    def player(self):
+        client = self.client()
+        if client is None:
+            return None
+        roles = client.roles_by_family("player")
+        return roles[0] if roles else None
+
+    def supports_volume(self) -> bool:
+        role = self.player()
+        return role is not None and PlayerCommand.VOLUME in role.state_supported_commands
+
     async def ensure_sink(self):
         if self.sink_created:
             return
@@ -94,6 +108,20 @@ class Speaker:
             "sendspin.url": self.url,
             "device.product.name": "Sendspin speaker",
         }
+        # The speaker reports what it supports in its first state message,
+        # shortly after connecting.
+        for _ in range(30):
+            if self.client() is None or self.supports_volume():
+                break
+            await asyncio.sleep(0.1)
+        if self.sink_created:
+            return
+        if self.supports_volume():
+            # Send full-scale audio and let the slider set the speaker's own
+            # volume instead, like AirPlay speakers. Scaling the audio here
+            # as well would leave the speaker at its own (often 100%) level.
+            self.hw_volume = True
+            props["monitor.channel-volumes"] = "false"
         await asyncio.to_thread(pw.create_speaker_sink, self.sink_name, self.name, props)
         self.sink_created = True
         self.task = asyncio.create_task(self.pump())
@@ -198,6 +226,36 @@ class Bridge:
         self.dialing: dict[str, bool] = {}
         self.server.add_event_listener(self.on_event)
 
+    async def sync_volumes(self):
+        """Keep each sink's volume slider and its speaker's own volume in step."""
+        while True:
+            await asyncio.sleep(1.0)
+            speakers = [s for s in self.speakers.values() if s.sink_created and s.hw_volume]
+            if not speakers:
+                continue
+            try:
+                graph = await asyncio.to_thread(pw.dump)
+            except Exception:  # noqa: BLE001
+                continue
+            for spk in speakers:
+                role = spk.player()
+                node = graph.node_by_name(spk.sink_name)
+                if role is None or node is None or node.volume is None:
+                    continue
+                dev = int(role.volume)
+                if spk.last_dev is None:
+                    # First sight: show the speaker's current volume on the slider.
+                    await asyncio.to_thread(pw.set_volume, node.id, dev / 100)
+                    spk.last_dev, spk.last_sink = dev, dev / 100
+                elif abs(node.volume - (spk.last_sink or 0)) > 0.005:
+                    target = max(0, min(100, round(node.volume * 100)))
+                    role.set_volume(target)
+                    spk.last_dev, spk.last_sink = target, node.volume
+                elif dev != spk.last_dev:
+                    # Changed on the speaker or from another app.
+                    await asyncio.to_thread(pw.set_volume, node.id, dev / 100)
+                    spk.last_dev, spk.last_sink = dev, dev / 100
+
     def on_event(self, server, event):
         cid = getattr(event, "client_id", None)
         if isinstance(event, (ClientAddedEvent, ClientConnectedEvent)) and cid:
@@ -245,6 +303,7 @@ class Bridge:
 
     async def run(self):
         await self.server.start_server(port=SERVER_PORT, discover_clients=False)
+        self.volume_task = asyncio.create_task(self.sync_volumes())
         self.zc = AsyncZeroconf()
         self.browser = AsyncServiceBrowser(self.zc.zeroconf, [SERVICE], handlers=[self.on_service])
         stop = asyncio.Event()
