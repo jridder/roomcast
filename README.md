@@ -75,8 +75,11 @@ speaker stops about a second after playback does. Satellite1 firmware
 (v0.2.1) still uses the unencrypted pre-1.0 protocol, which the bridge
 accepts.
 
-Sendspin plays about 1 second behind, AirPlay about 2, so a Satellite1 and a
-HomePod in the same output won't be in sync.
+Sendspin plays about 1 second behind live and AirPlay later than that, so a
+Satellite1 and a HomePod in the same output start out of sync. The Speakers
+tab has a **Timing** delay for each Sendspin speaker: raise it until the echo
+goes away. The bridge applies it by starting the speaker's stream that much
+later. It's saved as `delays` in `config.json`.
 
 ## Notes
 

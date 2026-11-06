@@ -78,6 +78,8 @@ class Speaker:
         self.hw_volume = False  # slider drives the speaker's own volume
         self.last_dev: int | None = None
         self.last_sink: float | None = None
+        self.delay_ms = 0  # extra hold-back to line up with AirPlay speakers
+        self.stream_delay_ms = 0  # the delay the running stream was started with
 
     @property
     def sink_name(self) -> str:
@@ -178,15 +180,25 @@ class Speaker:
                     retry_initial_connection=True,
                 )
             return
+        if self.stream is not None and self.stream_delay_ms != self.delay_ms:
+            self.stop_stream()  # restart on the new timeline
+        play_start = None
         if self.stream is None:
-            log.info("playing to %s", self.name)
+            log.info("playing to %s (delay %d ms)", self.name, self.delay_ms)
             self.stream = client.group.start_stream()
             self.stream.set_live_source(True)
+            self.stream_delay_ms = self.delay_ms
+            if self.delay_ms:
+                # Anchor the first chunk later than the library would; every
+                # following chunk continues from there, so the whole stream
+                # plays delay_ms later.
+                lead = getattr(self.stream, "_min_send_ahead_us", lambda: 1_100_000)()
+                play_start = self.stream.now_us() + lead + self.delay_ms * 1000
         try:
             # The capture already delivers audio in real time, so no extra
             # pacing: the speaker plays it about a second behind, steadily.
             self.stream.prepare_audio(data, FORMAT)
-            await self.stream.commit_audio()
+            await self.stream.commit_audio(play_start_us=play_start)
         except Exception:  # noqa: BLE001 - stream was stopped under us; restart next chunk
             log.info("stream to %s restarted", self.name)
             self.stream = None
@@ -226,10 +238,20 @@ class Bridge:
         self.dialing: dict[str, bool] = {}
         self.server.add_event_listener(self.on_event)
 
+    def load_delays(self):
+        m = config.mtime()
+        if m == getattr(self, "_cfg_mtime", None):
+            return
+        self._cfg_mtime = m
+        delays = config.load().get("delays", {})
+        for spk in self.speakers.values():
+            spk.delay_ms = int(delays.get("sendspin:" + spk.key, 0) or 0)
+
     async def sync_volumes(self):
         """Keep each sink's volume slider and its speaker's own volume in step."""
         while True:
             await asyncio.sleep(1.0)
+            self.load_delays()
             speakers = [s for s in self.speakers.values() if s.sink_created and s.hw_volume]
             if not speakers:
                 continue
@@ -295,6 +317,7 @@ class Bridge:
         if any(s.key == key for s in self.speakers.values()):
             return
         spk = Speaker(self, key, url, addrs[0], instance)
+        spk.delay_ms = int(config.load().get("delays", {}).get("sendspin:" + key, 0) or 0)
         self.speakers[url] = spk
         log.info("found Sendspin speaker %s at %s", instance, url)
         self.server.connect_to_client(url, retry_initial_connection=True)

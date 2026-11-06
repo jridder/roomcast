@@ -277,7 +277,8 @@ class Window(Adw.ApplicationWindow):
         sonos = [(z.name, z.ip, z.is_pair) for z in self.sonos_zones]
         access = sorted(self.access.items(), key=lambda kv: kv[0])
         return json.dumps(
-            [spk, outs, streams, local, playing, sonos, access, g.default_sink_name, self.cfg],
+            [spk, outs, streams, local, playing, sonos, access, g.default_sink_name,
+             {k: v for k, v in self.cfg.items() if k != "delays"}],
             sort_keys=True, default=str,
         )
 
@@ -585,6 +586,25 @@ class Window(Adw.ApplicationWindow):
             row.add_suffix(self.volume_scale(spk.node))
             group.add(row)
 
+        # --- timing for speakers that don't share AirPlay's timeline
+        sendspin = [spk for spk in speakers.values() if spk.kind == "sendspin"]
+        if sendspin:
+            group = self.add_group(page, Adw.PreferencesGroup(
+                title="Timing",
+                description="Sendspin speakers play sooner than AirPlay speakers. "
+                "Play something on both at once and raise the delay until the echo "
+                "goes away. Each change restarts the speaker's stream for a moment.",
+            ))
+            delays = self.cfg.get("delays", {})
+            for spk in sorted(sendspin, key=lambda s: s.name.lower()):
+                row = Adw.SpinRow.new_with_range(0, 3000, 50)
+                row.set_use_markup(False)
+                row.set_title(f"{spk.name} delay")
+                row.set_subtitle("Milliseconds")
+                row.set_value(delays.get(spk.key, 0))
+                row.connect("notify::value", lambda r, _p, k=spk.key: self.delay_changed(k, r.get_value()))
+                group.add(row)
+
         # --- Roomcast stereo pairs
         group = self.add_group(page, Adw.PreferencesGroup(
             title="Stereo Pairs",
@@ -733,6 +753,26 @@ class Window(Adw.ApplicationWindow):
     def on_start_service(self):
         run_bg(start_service, done=lambda *_: self.poll_soon(1500))
         self.banner.set_revealed(False)
+
+    def delay_changed(self, key, value):
+        if self.updating:
+            return
+        if getattr(self, "_delay_src", 0):
+            GLib.source_remove(self._delay_src)
+
+        def save():
+            self._delay_src = 0
+            cfg = config.load()
+            delays = cfg.setdefault("delays", {})
+            if value:
+                delays[key] = int(value)
+            else:
+                delays.pop(key, None)
+            config.save(cfg)  # no rebuild: the delay isn't part of the page signature
+            self.cfg = cfg
+            return False
+
+        self._delay_src = GLib.timeout_add(500, save)
 
     def toggle_member(self, oid, kind, ref, active):
         out = config.find(self.cfg["outputs"], oid)
