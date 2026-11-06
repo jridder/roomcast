@@ -1,0 +1,8 @@
+{
+  "uuid": "roomcast@jridder.local",
+  "name": "Roomcast",
+  "description": "Pick and control Roomcast network speaker outputs from the top panel.",
+  "shell-version": ["47", "48", "49", "50", "51"],
+  "url": "",
+  "version": 1
+}

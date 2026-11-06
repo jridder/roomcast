@@ -114,6 +114,9 @@ def prepare_module_dir(runtime: Path) -> tuple[Path | None, str]:
 class Daemon:
     def __init__(self):
         self.child: subprocess.Popen | None = None
+        self.bridge: subprocess.Popen | None = None
+        self.bridge_started = 0.0
+        self.bridge_available: bool | None = None
         self.child_started = 0.0
         self.cfg = config.load()
         self.cfg_mtime = config.mtime()
@@ -151,12 +154,37 @@ class Daemon:
         log.info("started speaker discovery (pid %s)", self.child.pid)
 
     def stop_discovery(self):
-        if self.child and self.child.poll() is None:
-            self.child.terminate()
-            try:
-                self.child.wait(5)
-            except subprocess.TimeoutExpired:
-                self.child.kill()
+        for proc in (self.bridge, self.child):  # bridge first: it removes its sinks
+            if proc and proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(8)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+
+    def ensure_bridge(self):
+        """Run the Sendspin bridge (Satellite1 and other Sendspin speakers)."""
+        if self.bridge_available is None:
+            r = subprocess.run(
+                [sys.executable, "-c", "import aiosendspin.server, zeroconf"],
+                capture_output=True,
+            )
+            self.bridge_available = r.returncode == 0
+            if not self.bridge_available:
+                log.warning("aiosendspin isn't installed; Sendspin speakers are disabled")
+        if not self.bridge_available:
+            return
+        if self.bridge and self.bridge.poll() is None:
+            return
+        if self.bridge is not None:
+            log.warning("Sendspin bridge exited with %s", self.bridge.returncode)
+            if time.monotonic() - self.bridge_started < 10:
+                return
+        self.bridge = subprocess.Popen(
+            [sys.executable, "-m", "roomcast.sendspin_bridge"], stdin=subprocess.DEVNULL
+        )
+        self.bridge_started = time.monotonic()
+        log.info("started Sendspin bridge (pid %s)", self.bridge.pid)
 
     # ----- reconcile ---------------------------------------------------
 
@@ -247,6 +275,7 @@ class Daemon:
         while self.running:
             try:
                 self.ensure_discovery()
+                self.ensure_bridge()
                 self.reload_config()
                 g = pw.dump()
                 if self.reconcile(g):

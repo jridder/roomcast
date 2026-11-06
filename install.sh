@@ -10,13 +10,17 @@ PREFIX="$SHARE/roomcast"
 BIN="$HOME/.local/bin"
 UNITDIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 APPID=io.github.jridder.Roomcast
+EXT_UUID=roomcast@jridder.local
+EXTDIR="$SHARE/gnome-shell/extensions/$EXT_UUID"
 
 if [ "${1:-}" = "--uninstall" ]; then
     systemctl --user disable --now roomcast.service 2>/dev/null || true
     rm -f "$UNITDIR/roomcast.service" "$BIN/roomcast" "$BIN/roomcastd" \
           "$SHARE/applications/$APPID.desktop" \
-          "$SHARE/icons/hicolor/scalable/apps/$APPID.svg"
-    rm -rf "$PREFIX"
+          "$SHARE/icons/hicolor/scalable/apps/$APPID.svg" \
+          "$SHARE/icons/hicolor/symbolic/apps/$APPID-symbolic.svg"
+    gnome-extensions disable "$EXT_UUID" 2>/dev/null || true
+    rm -rf "$PREFIX" "$EXTDIR"
     systemctl --user daemon-reload
     echo "Roomcast removed. Settings are kept in ~/.config/roomcast."
     exit 0
@@ -53,9 +57,11 @@ EOF
     chmod +x "$BIN/$name"
 done
 
-mkdir -p "$SHARE/applications" "$SHARE/icons/hicolor/scalable/apps" "$UNITDIR"
+mkdir -p "$SHARE/applications" "$SHARE/icons/hicolor/scalable/apps" \
+         "$SHARE/icons/hicolor/symbolic/apps" "$UNITDIR"
 sed "s|@BIN@|$BIN|g" "$SRC/data/$APPID.desktop" > "$SHARE/applications/$APPID.desktop"
 cp "$SRC/data/$APPID.svg" "$SHARE/icons/hicolor/scalable/apps/"
+cp "$SRC/data/$APPID-symbolic.svg" "$SHARE/icons/hicolor/symbolic/apps/"
 sed "s|@BIN@|$BIN|g" "$SRC/data/roomcast.service" > "$UNITDIR/roomcast.service"
 update-desktop-database "$SHARE/applications" 2>/dev/null || true
 gtk-update-icon-cache -q "$SHARE/icons/hicolor" 2>/dev/null || true
@@ -63,5 +69,31 @@ gtk-update-icon-cache -q "$SHARE/icons/hicolor" 2>/dev/null || true
 systemctl --user daemon-reload
 systemctl --user enable roomcast.service >/dev/null 2>&1
 systemctl --user restart roomcast.service
+# Top-panel menu (GNOME Shell extension)
+if command -v gnome-shell >/dev/null; then
+    rm -rf "$EXTDIR"
+    mkdir -p "$EXTDIR"
+    cp "$SRC/shell-extension/$EXT_UUID/"* "$EXTDIR/"
+    # Add it to GNOME's enabled list so it turns on at the next login even if
+    # the running shell doesn't know about it yet (new extensions on Wayland).
+    python3 - "$EXT_UUID" <<'PY'
+import ast, subprocess, sys
+uuid = sys.argv[1]
+cur = subprocess.run(["gsettings", "get", "org.gnome.shell", "enabled-extensions"],
+                     capture_output=True, text=True).stdout.strip()
+cur = cur.removeprefix("@as ")
+items = ast.literal_eval(cur) if cur.startswith("[") else []
+if uuid not in items:
+    items.append(uuid)
+    subprocess.run(["gsettings", "set", "org.gnome.shell", "enabled-extensions", str(items)])
+PY
+    if gnome-extensions enable "$EXT_UUID" 2>/dev/null &&
+       gnome-extensions info "$EXT_UUID" 2>/dev/null | grep -q "State: ACTIVE"; then
+        echo "Top-panel menu is on."
+    else
+        echo "Top-panel menu installed. It appears after you log out and back in."
+    fi
+fi
+
 echo "Installed. The background service is running and starts at login."
 echo "Open Roomcast from the app grid, or run: roomcast"

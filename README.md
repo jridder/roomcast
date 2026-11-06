@@ -1,7 +1,8 @@
 # Roomcast
 
 A GNOME app for playing this computer's sound on network speakers: HomePods,
-Sonos, and anything else that accepts AirPlay.
+Sonos and anything else that accepts AirPlay, plus Sendspin speakers such as
+the FutureProofHomes Satellite1.
 
 - **Outputs**: named groups of speakers. Each output shows up as an ordinary
   sound device in GNOME, so you can choose it in Sound Settings, or use it
@@ -15,6 +16,10 @@ Sonos, and anything else that accepts AirPlay.
 - **Per-app routing**: the Apps tab sends a single app (say, a music player)
   to your speakers while notifications and other system sounds stay on the
   computer. WirePlumber remembers the choice for next time.
+
+- **Top-panel menu**: a GNOME Shell extension that lists your outputs and pairs,
+  each with a volume slider. Pick one to make it the default output, switch
+  back to the computer's speakers, or send a playing app somewhere else.
 
 ## Install
 
@@ -57,6 +62,21 @@ service isn't installed, the app starts the background process itself.
 - Per-app routing writes `target.object` (the sink's `object.serial`, type
   `Spa:Id`) to the default metadata, the form WirePlumber stores and
   restores.
+
+### Sendspin speakers (Satellite1)
+
+`roomcast.sendspin_bridge`, which the service starts, finds speakers through
+their `_sendspin._tcp` mDNS records and gives each one a sink named
+`sendspin_sink.<name>`. From then on the service treats it like any other
+speaker. A passive `pw-record` captures that sink's audio and pushes it to
+the speaker through an [aiosendspin](https://pypi.org/project/aiosendspin/)
+server. The capture only runs while something plays, and the stream to the
+speaker stops about a second after playback does. Satellite1 firmware
+(v0.2.1) still uses the unencrypted pre-1.0 protocol, which the bridge
+accepts.
+
+Sendspin plays about 1 second behind, AirPlay about 2, so a Satellite1 and a
+HomePod in the same output won't be in sync.
 
 ## Notes
 

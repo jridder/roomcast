@@ -14,6 +14,7 @@ import subprocess
 from dataclasses import dataclass, field
 
 OUTPUT_PREFIX = "roomcast."
+SENDSPIN_PREFIX = "sendspin_sink."
 DISCOVERY_APP_NAME = "Roomcast speaker discovery"
 
 # raop_sink.<host>.<ip>.<port>, e.g. raop_sink.Office-Left.local.192.168.3.177.7000
@@ -54,9 +55,10 @@ class Node:
 class Speaker:
     """A network speaker exposed by the RAOP (AirPlay) discovery module."""
 
-    key: str  # stable mDNS host name, e.g. "Office-Left.local"
+    key: str  # stable mDNS host name, e.g. "Office-Left.local", or "sendspin:<name>"
     ip: str
     node: Node
+    kind: str = "airplay"  # or "sendspin"
 
     @property
     def name(self) -> str:
@@ -153,6 +155,10 @@ class Graph:
         """Discovered AirPlay speakers keyed by host name (IPv4 preferred)."""
         result: dict[str, Speaker] = {}
         for n in self.sinks():
+            if n.name.startswith(SENDSPIN_PREFIX):
+                key = "sendspin:" + n.name[len(SENDSPIN_PREFIX):]
+                result[key] = Speaker(key, n.props.get("sendspin.ip", ""), n, "sendspin")
+                continue
             m = _RAOP_RE.match(n.name)
             if not m:
                 continue
@@ -173,7 +179,7 @@ class Graph:
     def local_sinks(self) -> list[Node]:
         return [
             n for n in self.sinks()
-            if not n.name.startswith(OUTPUT_PREFIX) and not _RAOP_RE.match(n.name)
+            if not n.name.startswith((OUTPUT_PREFIX, SENDSPIN_PREFIX)) and not _RAOP_RE.match(n.name)
         ]
 
     def app_streams(self) -> list[Node]:
@@ -255,6 +261,34 @@ def create_output_sink(output_id: str, description: str) -> bool:
         for k, v in props.items()
     )
     return _run("pw-cli", "create-node", "adapter", "{ " + body + " }")
+
+
+def create_speaker_sink(name: str, description: str, extra: dict) -> bool:
+    """A sink that stands for a non-AirPlay network speaker (see sendspin_bridge)."""
+    props = {
+        "factory.name": "support.null-audio-sink",
+        "node.name": name,
+        "node.description": description,
+        "media.class": "Audio/Sink",
+        "audio.position": "[ FL FR ]",
+        "monitor.channel-volumes": "true",
+        "object.linger": "true",
+        "device.icon-name": "audio-speakers",
+        **extra,
+    }
+    body = " ".join(
+        f"{k}={v if v.startswith('[') or v in ('true', 'false') else _spa_str(v)}"
+        for k, v in props.items()
+    )
+    return _run("pw-cli", "create-node", "adapter", "{ " + body + " }")
+
+
+def destroy_by_name(name: str) -> bool:
+    try:
+        node = dump().node_by_name(name)
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return False
+    return destroy(node.id) if node else False
 
 
 def destroy(object_id: int) -> bool:

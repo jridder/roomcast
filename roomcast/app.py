@@ -203,6 +203,8 @@ class Window(Adw.ApplicationWindow):
         """
         now = time.monotonic()
         for spk in self.speakers().values():
+            if spk.kind != "airplay":
+                continue
             ip = spk.ip
             last = self.access_checked.get(ip)
             if last is not None:
@@ -301,6 +303,10 @@ class Window(Adw.ApplicationWindow):
         return self.mdns.lookup(spk.key, spk.ip)
 
     def speaker_model(self, spk: pw.Speaker) -> str:
+        if spk.kind == "sendspin":
+            if "satellite1" in spk.key.lower():
+                return "FutureProofHomes Satellite1 · Sendspin"
+            return "Sendspin speaker"
         info = self.speaker_info(spk)
         return friendly_model(info) if info else "AirPlay speaker"
 
@@ -539,7 +545,8 @@ class Window(Adw.ApplicationWindow):
         # --- discovered speakers
         group = self.add_group(page, Adw.PreferencesGroup(
             title="Network Speakers",
-            description="AirPlay speakers found on your network, including HomePods and Sonos.",
+            description="Speakers found on your network: AirPlay (HomePod, Sonos) and "
+            "Sendspin (FutureProofHomes Satellite1).",
         ))
         if not speakers:
             row = ActionRow(
