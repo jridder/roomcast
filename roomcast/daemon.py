@@ -1,0 +1,213 @@
+"""Roomcast background service.
+
+* Runs PipeWire's AirPlay (RAOP) discovery module in a child ``pipewire``
+  process, so every speaker on the network shows up as a sink.
+* Keeps one virtual sink per configured output ("roomcast.<id>"). Apps and
+  GNOME Settings see these as ordinary sound devices.
+* Links each output's monitor channels to its speakers: stereo speakers get
+  L->L and R->R, the left half of a pair gets L on both inputs, the right
+  half gets R on both inputs.
+
+The virtual sinks are never torn down while the service runs, so adding or
+removing speakers never makes a playing app jump to the computer's own
+speakers.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import signal
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+from . import config, pw
+
+log = logging.getLogger("roomcastd")
+
+DISCOVERY_CONF = """\
+context.properties = {{
+    application.name = "{app}"
+    log.level = 1
+}}
+context.spa-libs = {{
+    audio.convert.* = audioconvert/libspa-audioconvert
+    support.*       = support/libspa-support
+}}
+context.modules = [
+    {{ name = libpipewire-module-rt flags = [ ifexists nofail ] }}
+    {{ name = libpipewire-module-protocol-native }}
+    {{ name = libpipewire-module-client-node }}
+    {{ name = libpipewire-module-adapter }}
+    {{ name = libpipewire-module-raop-discover
+      args = {{
+        stream.rules = [
+          {{ matches = [ {{ raop.ip = "~.*" }} ]
+            actions = {{ create-stream = {{ }} }} }}
+        ]
+      }}
+    }}
+]
+"""
+
+
+class Daemon:
+    def __init__(self):
+        self.child: subprocess.Popen | None = None
+        self.child_started = 0.0
+        self.cfg = config.load()
+        self.cfg_mtime = config.mtime()
+        self.running = True
+        runtime = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "roomcast"
+        runtime.mkdir(parents=True, exist_ok=True)
+        self.conf_path = runtime / "discovery.conf"
+
+    # ----- discovery child --------------------------------------------
+
+    def ensure_discovery(self):
+        if self.child and self.child.poll() is None:
+            return
+        if self.child is not None:
+            log.warning("discovery process exited with %s; restarting", self.child.returncode)
+            if time.monotonic() - self.child_started < 5:
+                return  # back off; try again on a later tick
+        self.conf_path.write_text(DISCOVERY_CONF.format(app=pw.DISCOVERY_APP_NAME))
+        self.child = subprocess.Popen(
+            ["pipewire", "-c", str(self.conf_path)],
+            stdin=subprocess.DEVNULL,
+        )
+        self.child_started = time.monotonic()
+        log.info("started speaker discovery (pid %s)", self.child.pid)
+
+    def stop_discovery(self):
+        if self.child and self.child.poll() is None:
+            self.child.terminate()
+            try:
+                self.child.wait(5)
+            except subprocess.TimeoutExpired:
+                self.child.kill()
+
+    # ----- reconcile ---------------------------------------------------
+
+    def reload_config(self):
+        m = config.mtime()
+        if m != self.cfg_mtime:
+            self.cfg_mtime = m
+            self.cfg = config.load()
+            log.info("configuration reloaded")
+            return True
+        return False
+
+    def reconcile(self, g: pw.Graph) -> bool:
+        """Make the graph match the config. Returns True if anything changed."""
+        changed = False
+        wanted = {o["id"]: o for o in self.cfg["outputs"]}
+        existing = g.outputs()
+
+        for oid, node in existing.items():
+            out = wanted.get(oid)
+            if out is None:
+                log.info("removing output %s", node.description)
+                pw.destroy(node.id)
+                changed = True
+            elif node.description != out["name"] and node.state != "running":
+                # Renames need a new node; only do it while nothing is playing.
+                log.info("renaming output %s -> %s", node.description, out["name"])
+                pw.destroy(node.id)
+                changed = True
+
+        for oid, out in wanted.items():
+            if oid not in existing:
+                log.info("creating output %s", out["name"])
+                pw.create_output_sink(oid, out["name"])
+                changed = True
+
+        if changed:
+            return True  # links are done on the next pass, once nodes exist
+
+        speakers = g.speakers()
+        desired: set[tuple[int, int]] = set()
+        managed_ports: set[int] = set()
+        for oid, node in existing.items():
+            out = wanted.get(oid)
+            if out is None:
+                continue
+            src = {"FL": node.out_ports.get("monitor_FL"), "FR": node.out_ports.get("monitor_FR")}
+            managed_ports.update(p for p in src.values() if p)
+            if not all(src.values()):
+                continue
+            for key, role in config.flatten_members(self.cfg, out):
+                spk = speakers.get(key)
+                if spk is None:
+                    continue
+                desired |= _port_pairs(src, spk.node.in_ports, role)
+
+        current = {
+            (l.out_port, l.in_port): l.id
+            for l in g.links.values()
+            if l.out_port in managed_ports
+        }
+        for pair, link_id in current.items():
+            if pair not in desired:
+                pw.unlink(link_id)
+                changed = True
+        for out_port, in_port in desired - current.keys():
+            pw.link(out_port, in_port)
+            changed = True
+        return changed
+
+    def teardown(self):
+        try:
+            g = pw.dump()
+            for node in g.outputs().values():
+                pw.destroy(node.id)
+        except Exception:  # noqa: BLE001 - best effort on shutdown
+            log.exception("teardown failed")
+        self.stop_discovery()
+
+    def run(self):
+        def stop(*_):
+            self.running = False
+
+        signal.signal(signal.SIGTERM, stop)
+        signal.signal(signal.SIGINT, stop)
+        signal.signal(signal.SIGHUP, lambda *_: setattr(self, "cfg_mtime", -1))
+        log.info("Roomcast service starting")
+        while self.running:
+            try:
+                self.ensure_discovery()
+                self.reload_config()
+                g = pw.dump()
+                if self.reconcile(g):
+                    time.sleep(0.3)
+                    continue
+            except Exception:  # noqa: BLE001 - keep the service alive
+                log.exception("reconcile failed")
+            time.sleep(1.0)
+        log.info("Roomcast service stopping")
+        self.teardown()
+
+
+def _port_pairs(src: dict, dst: dict, role: str) -> set[tuple[int, int]]:
+    if not dst:
+        return set()
+    if role == "left":
+        return {(src["FL"], p) for p in dst.values()}
+    if role == "right":
+        return {(src["FR"], p) for p in dst.values()}
+    if "FL" in dst and "FR" in dst:
+        return {(src["FL"], dst["FL"]), (src["FR"], dst["FR"])}
+    return {(s, p) for s in src.values() for p in dst.values()}  # mono speaker
+
+
+def main():
+    logging.basicConfig(
+        level=logging.INFO, stream=sys.stderr, format="%(levelname)s %(message)s"
+    )
+    Daemon().run()
+
+
+if __name__ == "__main__":
+    main()

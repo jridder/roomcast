@@ -1,0 +1,4 @@
+#!/bin/sh
+HERE="$(cd "$(dirname "$0")/.." && pwd)"
+export PYTHONPATH="$HERE${PYTHONPATH:+:$PYTHONPATH}"
+exec "${ROOMCAST_PYTHON:-python3}" -m roomcast.daemon "$@"

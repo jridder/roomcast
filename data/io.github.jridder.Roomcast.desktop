@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Roomcast
+GenericName=Network Speakers
+Comment=Play sound on HomePods, Sonos and other AirPlay speakers
+Exec=@BIN@/roomcast
+Icon=io.github.jridder.Roomcast
+Terminal=false
+Categories=AudioVideo;Audio;GTK;
+Keywords=airplay;homepod;sonos;speaker;stereo;pair;multiroom;
+StartupNotify=true
+StartupWMClass=io.github.jridder.Roomcast

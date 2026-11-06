@@ -1,0 +1,12 @@
+[Unit]
+Description=Roomcast network speaker service
+After=pipewire.service wireplumber.service
+Wants=pipewire.service wireplumber.service
+
+[Service]
+ExecStart=@BIN@/roomcastd
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target
