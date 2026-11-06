@@ -49,6 +49,38 @@ def is_sonos(info: dict) -> bool:
     return info.get("manufacturer", "").lower() == "sonos"
 
 
+ACCESS_OK = "ok"
+ACCESS_FORBIDDEN = "forbidden"  # HomePod/Apple TV limited to people in the Home
+ACCESS_PASSWORD = "password"  # speaker wants an AirPlay password
+
+
+def probe_access(ip: str, port: int = 7000) -> str | None:
+    """Ask a speaker whether it will accept AirPlay from this computer.
+
+    Sends one RTSP OPTIONS request, the same first step every AirPlay
+    sender makes. It doesn't start playback or interrupt the speaker.
+    Blocking; run it in a worker thread.
+    """
+    import socket
+
+    try:
+        with socket.create_connection((ip, port), timeout=3) as s:
+            s.sendall(b"OPTIONS * RTSP/1.0\r\nCSeq: 1\r\nUser-Agent: Roomcast\r\n\r\n")
+            s.settimeout(3)
+            status = s.recv(512).decode(errors="replace").split("\r\n", 1)[0]
+    except OSError:
+        return None
+    parts = status.split()
+    code = parts[1] if len(parts) > 1 else ""
+    if code == "200":
+        return ACCESS_OK
+    if code == "403":
+        return ACCESS_FORBIDDEN
+    if code == "401":
+        return ACCESS_PASSWORD
+    return None
+
+
 class AirPlayBrowser:
     """Collects mDNS TXT records keyed by host name ("Kitchen.local")."""
 

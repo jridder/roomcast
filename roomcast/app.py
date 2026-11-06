@@ -16,7 +16,9 @@ gi.require_version("Adw", "1")
 from gi.repository import Adw, Gio, GLib, Gtk  # noqa: E402
 
 from . import __version__, config, pw  # noqa: E402
-from .devices import AirPlayBrowser, SonosManager, friendly_model, is_sonos  # noqa: E402
+from .devices import (  # noqa: E402
+    ACCESS_FORBIDDEN, ACCESS_PASSWORD, AirPlayBrowser, SonosManager, friendly_model, probe_access,
+)
 
 APP_ID = "io.github.jridder.Roomcast"
 SERVICE = "roomcast.service"
@@ -92,6 +94,8 @@ class Window(Adw.ApplicationWindow):
         self.sonos = SonosManager()
         self.sonos_zones = []
         self.sonos_busy = False
+        self.access: dict[str, str | None] = {}  # speaker ip -> probe result
+        self.access_checked: dict[str, float] = {}
         self.polling = False
         self.mdns = AirPlayBrowser(lambda: GLib.idle_add(self.on_mdns_change))
 
@@ -177,6 +181,7 @@ class Window(Adw.ApplicationWindow):
         except (GLib.Error, ValueError):
             return
         self.graph = graph
+        self.probe_speakers()
         self.cfg = config.load()
         self.banner.set_revealed(not graph.discovery_running())
         sig = self.make_signature()
@@ -189,6 +194,58 @@ class Window(Adw.ApplicationWindow):
     def on_mdns_change(self):
         self.signature = None
         return False
+
+    def probe_speakers(self):
+        """Check, in the background, which speakers will accept AirPlay from us.
+
+        Blocked speakers are re-checked every 15 seconds so fixing the Home
+        app setting shows up quickly; working ones every 5 minutes.
+        """
+        now = time.monotonic()
+        for spk in self.graph.speakers().values():
+            ip = spk.ip
+            last = self.access_checked.get(ip)
+            if last is not None:
+                wait = 300 if self.access.get(ip) not in (ACCESS_FORBIDDEN, ACCESS_PASSWORD) else 15
+                if now - last < wait:
+                    continue
+            self.access_checked[ip] = now
+
+            def done(result, _error, ip=ip):
+                if self.access.get(ip) != result:
+                    self.access[ip] = result
+                    self.signature = None
+
+            run_bg(probe_access, ip, done=done)
+
+    def blocked(self, spk: pw.Speaker | None) -> str | None:
+        if spk is None:
+            return None
+        state = self.access.get(spk.ip)
+        if state == ACCESS_FORBIDDEN:
+            return "Blocked by Home app access setting"
+        if state == ACCESS_PASSWORD:
+            return "Needs an AirPlay password"
+        return None
+
+    def access_help_group(self, page, speakers):
+        blocked = [s for s in speakers.values() if self.blocked(s)]
+        if not blocked:
+            return
+        names = ", ".join(sorted(s.name for s in blocked))
+        group = self.add_group(page, Adw.PreferencesGroup())
+        row = ActionRow(
+            title="Some speakers are refusing this computer",
+            subtitle=f"{names} only accept AirPlay from people in your Apple Home. To fix it, "
+            "open the Home app on an iPhone, iPad or Mac and go to Home Settings › "
+            "Speakers & TV › Allow Speaker & TV Access, then choose “Anyone on the Same "
+            "Network”. Leave “Require Password” off. Roomcast notices the change within "
+            "about 15 seconds.",
+        )
+        icon = Gtk.Image(icon_name="dialog-warning-symbolic", valign=Gtk.Align.START, margin_top=12)
+        icon.add_css_class("warning")
+        row.add_prefix(icon)
+        group.add(row)
 
     def refresh_sonos(self):
         if not self.sonos.available or self.sonos_busy:
@@ -216,8 +273,9 @@ class Window(Adw.ApplicationWindow):
         local = sorted((n.name, n.description) for n in g.local_sinks())
         playing = sorted(k for k, s in g.speakers().items() if s.node.state == "running")
         sonos = [(z.name, z.ip, z.is_pair) for z in self.sonos_zones]
+        access = sorted(self.access.items(), key=lambda kv: kv[0])
         return json.dumps(
-            [spk, outs, streams, local, playing, sonos, g.default_sink_name, self.cfg],
+            [spk, outs, streams, local, playing, sonos, access, g.default_sink_name, self.cfg],
             sort_keys=True, default=str,
         )
 
@@ -347,6 +405,7 @@ class Window(Adw.ApplicationWindow):
         g = self.graph
         speakers = g.speakers()
         live = g.outputs()
+        self.access_help_group(page, speakers)
 
         group = self.add_group(page, Adw.PreferencesGroup(
             title="Outputs",
@@ -392,6 +451,9 @@ class Window(Adw.ApplicationWindow):
             status.append("Playing")
         if node and self.graph.default_sink_name == node.name:
             status.append("Default output")
+        flat = config.flatten_members(self.cfg, out)
+        if any(self.blocked(speakers.get(k)) for k, _ in flat):
+            status.append("Some speakers are blocked")
 
         exp = ExpanderRow(title=out["name"], subtitle=" · ".join(status))
         exp.add_prefix(Gtk.Image(icon_name="audio-speakers-symbolic"))
@@ -419,7 +481,11 @@ class Window(Adw.ApplicationWindow):
         shown = set()
         for key, spk in sorted(speakers.items(), key=lambda kv: kv[1].name.lower()):
             shown.add(key)
-            exp.add_row(member_row("speaker", key, spk.name, self.speaker_model(spk)))
+            problem = self.blocked(spk)
+            exp.add_row(member_row(
+                "speaker", key, spk.name,
+                f"{self.speaker_model(spk)} · {problem}" if problem else self.speaker_model(spk),
+            ))
         for t, ref in sorted(members):
             if t == "speaker" and ref not in shown:
                 exp.add_row(member_row("speaker", ref, self.speaker_name(ref), "Not found on the network"))
@@ -449,6 +515,8 @@ class Window(Adw.ApplicationWindow):
         g = self.graph
         speakers = g.speakers()
 
+        self.access_help_group(page, speakers)
+
         # --- discovered speakers
         group = self.add_group(page, Adw.PreferencesGroup(
             title="Network Speakers",
@@ -469,6 +537,9 @@ class Window(Adw.ApplicationWindow):
         for key, spk in sorted(speakers.items(), key=lambda kv: kv[1].name.lower()):
             info = self.speaker_info(spk)
             bits = [self.speaker_model(spk), spk.ip]
+            problem = self.blocked(spk)
+            if problem:
+                bits.insert(0, problem)
             if key in apple_partner:
                 bits.append(f"Paired with {self.speaker_name(apple_partner[key])} in Apple Home")
             zone = self.sonos_zone_for(spk)
@@ -477,6 +548,10 @@ class Window(Adw.ApplicationWindow):
             row = ActionRow(title=spk.name, subtitle=" · ".join(bits))
             icon = "video-display-symbolic" if info.get("model", "").startswith("AppleTV") else "audio-speakers-symbolic"
             row.add_prefix(Gtk.Image(icon_name=icon))
+            if problem:
+                warn = Gtk.Image(icon_name="dialog-warning-symbolic", tooltip_text=problem)
+                warn.add_css_class("warning")
+                row.add_suffix(warn)
             if spk.node.state == "running":
                 playing = Gtk.Image(icon_name="media-playback-start-symbolic", tooltip_text="Playing")
                 playing.add_css_class("accent")

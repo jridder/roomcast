@@ -60,10 +60,12 @@ service isn't installed, the app starts the background process itself.
 
 ## Notes
 
-- **HomePod access**: the HomePods must accept AirPlay from the computer. In
-  the Home app, go to Home Settings › Speakers & TV › Allow Speaker & TV
-  Access, and choose "Anyone on the Same Network" (with or without a
-  password).
+- **HomePod access**: HomePods and Apple TVs reject AirPlay from the
+  computer (`RTSP/1.0 403 Forbidden`) unless the Home allows it. In the Home
+  app, go to Home Settings › Speakers & TV › Allow Speaker & TV Access, choose
+  "Anyone on the Same Network", and leave "Require Password" off. Roomcast
+  checks every speaker with a single RTSP `OPTIONS` request (which doesn't
+  interrupt playback) and flags any that refuse.
 - **HomePod hardware pairs** can only be made in Apple's Home app; Apple has
   no public API for it. Roomcast pairs do the same job from the computer and
   leave your Home setup unchanged.
