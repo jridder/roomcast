@@ -18,7 +18,8 @@ if [ "${1:-}" = "--uninstall" ]; then
     rm -f "$UNITDIR/roomcast.service" "$BIN/roomcast" "$BIN/roomcastd" \
           "$SHARE/applications/$APPID.desktop" \
           "$SHARE/icons/hicolor/scalable/apps/$APPID.svg" \
-          "$SHARE/icons/hicolor/symbolic/apps/$APPID-symbolic.svg"
+          "$SHARE/icons/hicolor/symbolic/apps/$APPID-symbolic.svg" \
+          "$SHARE/metainfo/$APPID.metainfo.xml"
     gnome-extensions disable "$EXT_UUID" 2>/dev/null || true
     rm -rf "$PREFIX" "$EXTDIR"
     systemctl --user daemon-reload
@@ -26,15 +27,48 @@ if [ "${1:-}" = "--uninstall" ]; then
     exit 0
 fi
 
-for tool in pipewire pw-dump pw-cli pw-link pw-metadata wpctl; do
-    command -v "$tool" >/dev/null || { echo "Missing $tool (PipeWire tools)"; exit 1; }
+# ----- prerequisites ---------------------------------------------------
+
+missing=""
+need() { missing="$missing $1"; }
+
+for tool in pipewire pw-dump pw-cli pw-link pw-metadata; do
+    command -v "$tool" >/dev/null || { need pipewire-tools; break; }
 done
-[ -e /usr/lib/x86_64-linux-gnu/pipewire-0.3/libpipewire-module-raop-discover.so ] ||
-    ls /usr/lib*/pipewire-0.3/libpipewire-module-raop-discover.so >/dev/null 2>&1 ||
-    ls /usr/lib/*/pipewire-0.3/libpipewire-module-raop-discover.so >/dev/null 2>&1 ||
-    echo "Warning: PipeWire's RAOP (AirPlay) module wasn't found; speakers won't be discovered."
-python3 -c 'import gi; gi.require_version("Adw","1"); from gi.repository import Adw' 2>/dev/null ||
-    { echo "Missing GTK 4 / libadwaita Python bindings (python3-gi, gir1.2-adw-1)"; exit 1; }
+command -v wpctl >/dev/null || need wireplumber
+raop=""
+for f in /usr/lib/*/pipewire-0.3/libpipewire-module-raop-sink.so \
+         /usr/lib*/pipewire-0.3/libpipewire-module-raop-sink.so; do
+    [ -e "$f" ] && raop=1
+done
+[ -n "$raop" ] || need pipewire-airplay-module
+python3 -c 'import sys; sys.exit(sys.version_info < (3, 10))' 2>/dev/null || need python3.10
+python3 -c 'import venv, ensurepip' 2>/dev/null || need python3-venv
+python3 - <<'PY' 2>/dev/null || need gtk4-libadwaita
+import gi
+gi.require_version("Gtk", "4.0")
+gi.require_version("Adw", "1")
+from gi.repository import Adw
+raise SystemExit(0 if (Adw.get_major_version(), Adw.get_minor_version()) >= (1, 6) else 1)
+PY
+
+if [ -n "$missing" ]; then
+    echo "Roomcast needs some packages first:$missing"
+    . /etc/os-release 2>/dev/null || true
+    case " ${ID:-} ${ID_LIKE:-} " in
+        *" debian "*|*" ubuntu "*)
+            echo "Install them with:"
+            echo "  sudo apt install pipewire-bin libpipewire-0.3-modules wireplumber python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 python3-venv" ;;
+        *" fedora "*)
+            echo "Install them with:"
+            echo "  sudo dnf install pipewire pipewire-utils wireplumber python3-gobject gtk4 libadwaita" ;;
+        *" arch "*)
+            echo "Install them with:"
+            echo "  sudo pacman -S pipewire wireplumber python-gobject gtk4 libadwaita" ;;
+    esac
+    echo "GTK 4 with libadwaita 1.6 or newer and Python 3.10 or newer are required."
+    exit 1
+fi
 
 echo "Setting up Python environment in $PREFIX/venv"
 mkdir -p "$PREFIX"
@@ -62,6 +96,8 @@ mkdir -p "$SHARE/applications" "$SHARE/icons/hicolor/scalable/apps" \
 sed "s|@BIN@|$BIN|g" "$SRC/data/$APPID.desktop" > "$SHARE/applications/$APPID.desktop"
 cp "$SRC/data/$APPID.svg" "$SHARE/icons/hicolor/scalable/apps/"
 cp "$SRC/data/$APPID-symbolic.svg" "$SHARE/icons/hicolor/symbolic/apps/"
+mkdir -p "$SHARE/metainfo"
+cp "$SRC/data/$APPID.metainfo.xml" "$SHARE/metainfo/"
 sed "s|@BIN@|$BIN|g" "$SRC/data/roomcast.service" > "$UNITDIR/roomcast.service"
 update-desktop-database "$SHARE/applications" 2>/dev/null || true
 gtk-update-icon-cache -q "$SHARE/icons/hicolor" 2>/dev/null || true

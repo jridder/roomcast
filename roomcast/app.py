@@ -1018,6 +1018,8 @@ class Window(Adw.ApplicationWindow):
             version=__version__,
             comments="Play this computer's sound on HomePods, Sonos and other AirPlay speakers.",
             license_type=Gtk.License.GPL_3_0,
+            website="https://github.com/jridder/roomcast",
+            issue_url="https://github.com/jridder/roomcast/issues",
         ).present(self)
 
     def on_close(self, *_):

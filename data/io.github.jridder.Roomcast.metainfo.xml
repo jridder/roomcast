@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.jridder.Roomcast</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>Roomcast</name>
+  <summary>Play your computer's sound on HomePods, Sonos and other network speakers</summary>
+  <developer id="io.github.jridder">
+    <name>jridder</name>
+  </developer>
+  <description>
+    <p>
+      Roomcast sends this computer's audio to AirPlay speakers such as HomePods and
+      Sonos, and to Sendspin speakers such as the FutureProofHomes Satellite1.
+    </p>
+    <ul>
+      <li>Group speakers into outputs that show up as ordinary sound devices</li>
+      <li>Make left/right stereo pairs from any two speakers, HomePods included</li>
+      <li>Pair and separate Sonos speakers</li>
+      <li>Send one app to your speakers while system sounds stay on the computer</li>
+      <li>Control it all from a menu in the top panel</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">io.github.jridder.Roomcast.desktop</launchable>
+  <url type="homepage">https://github.com/jridder/roomcast</url>
+  <url type="bugtracker">https://github.com/jridder/roomcast/issues</url>
+  <categories>
+    <category>AudioVideo</category>
+    <category>Audio</category>
+  </categories>
+  <requires>
+    <display_length compare="ge">360</display_length>
+  </requires>
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+    <control>touch</control>
+  </supports>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.1.0" date="2026-11-06">
+      <description>
+        <p>First release.</p>
+      </description>
+    </release>
+  </releases>
+</component>

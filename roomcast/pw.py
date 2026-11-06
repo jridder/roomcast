@@ -17,7 +17,7 @@ OUTPUT_PREFIX = "roomcast."
 SENDSPIN_PREFIX = "sendspin_sink."
 DISCOVERY_APP_NAME = "Roomcast speaker discovery"
 
-# raop_sink.<host>.<ip>.<port>, e.g. raop_sink.Office-Left.local.192.168.3.177.7000
+# raop_sink.<host>.<ip>.<port>, e.g. raop_sink.Office-Left.local.192.168.1.20.7000
 _RAOP_RE = re.compile(
     r"^raop_sink\.(?P<host>.+?)\.(?P<ip>\d+(?:\.\d+){3}|[0-9A-Fa-f]*:[0-9A-Fa-f:]*)\.(?P<port>\d+)$"
 )
