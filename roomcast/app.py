@@ -202,7 +202,7 @@ class Window(Adw.ApplicationWindow):
         app setting shows up quickly; working ones every 5 minutes.
         """
         now = time.monotonic()
-        for spk in self.graph.speakers().values():
+        for spk in self.speakers().values():
             ip = spk.ip
             last = self.access_checked.get(ip)
             if last is not None:
@@ -264,14 +264,14 @@ class Window(Adw.ApplicationWindow):
 
     def make_signature(self):
         g = self.graph
-        spk = sorted((k, s.name) for k, s in g.speakers().items())
+        spk = sorted((k, s.name) for k, s in self.speakers().items())
         outs = sorted((k, n.description, n.state == "running") for k, n in g.outputs().items())
         streams = []
         for s in g.app_streams():
             sink = g.linked_sink(s)
             streams.append((s.id, s.description, s.props.get("media.name"), sink.name if sink else None, g.targets.get(s.id)))
         local = sorted((n.name, n.description) for n in g.local_sinks())
-        playing = sorted(k for k, s in g.speakers().items() if s.node.state == "running")
+        playing = sorted(k for k, s in self.speakers().items() if s.node.state == "running")
         sonos = [(z.name, z.ip, z.is_pair) for z in self.sonos_zones]
         access = sorted(self.access.items(), key=lambda kv: kv[0])
         return json.dumps(
@@ -287,6 +287,16 @@ class Window(Adw.ApplicationWindow):
 
     # ----- helpers -------------------------------------------------------
 
+    def speakers(self) -> dict[str, pw.Speaker]:
+        """Speakers the app offers. Apple TVs are hidden: they refuse
+        PipeWire's AirPlay stream even with the HomePod workaround."""
+        if not self.graph:
+            return {}
+        return {
+            k: spk for k, spk in self.graph.speakers().items()
+            if not self.speaker_info(spk).get("model", "").startswith("AppleTV")
+        }
+
     def speaker_info(self, spk: pw.Speaker) -> dict:
         return self.mdns.lookup(spk.key, spk.ip)
 
@@ -295,7 +305,7 @@ class Window(Adw.ApplicationWindow):
         return friendly_model(info) if info else "AirPlay speaker"
 
     def speaker_name(self, key: str) -> str:
-        spk = self.graph.speakers().get(key) if self.graph else None
+        spk = self.speakers().get(key) if self.graph else None
         if spk:
             return spk.name
         return key.removesuffix(".local").replace("-", " ")
@@ -303,7 +313,7 @@ class Window(Adw.ApplicationWindow):
     def apple_pairs(self) -> list[tuple[str, str]]:
         """HomePods stereo-paired in Apple Home, as (left key, right key)."""
         groups: dict[str, list[pw.Speaker]] = {}
-        for spk in self.graph.speakers().values():
+        for spk in self.speakers().values():
             info = self.speaker_info(spk)
             tsid = info.get("tsid")
             if tsid and info.get("model", "").startswith("AudioAccessory"):
@@ -412,7 +422,7 @@ class Window(Adw.ApplicationWindow):
         page = self.page_outputs
         self.clear(page)
         g = self.graph
-        speakers = g.speakers()
+        speakers = self.speakers()
         live = g.outputs()
         self.access_help_group(page, speakers)
 
@@ -522,7 +532,7 @@ class Window(Adw.ApplicationWindow):
         page = self.page_speakers
         self.clear(page)
         g = self.graph
-        speakers = g.speakers()
+        speakers = self.speakers()
 
         self.access_help_group(page, speakers)
 
@@ -682,7 +692,7 @@ class Window(Adw.ApplicationWindow):
                 choices.append((n.name, f"{p['name']} (stereo pair)"))
         for n in sorted(g.local_sinks(), key=lambda n: n.description):
             choices.append((n.name, n.description))
-        for spk in sorted(g.speakers().values(), key=lambda s: s.name):
+        for spk in sorted(self.speakers().values(), key=lambda s: s.name):
             choices.append((spk.node.name, f"{spk.name} (speaker only)"))
         labels = Gtk.StringList.new([label for _, label in choices])
 
@@ -828,7 +838,7 @@ class Window(Adw.ApplicationWindow):
         self.save()
 
     def pair_dialog(self, pair=None):
-        speakers = sorted(self.graph.speakers().values(), key=lambda s: s.name.lower())
+        speakers = sorted(self.speakers().values(), key=lambda s: s.name.lower())
         keys = [s.key for s in speakers]
         if pair:
             for k in (pair["left"], pair["right"]):
