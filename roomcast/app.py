@@ -352,7 +352,9 @@ class Window(Adw.ApplicationWindow):
         scale.set_valign(Gtk.Align.CENTER)
         scale.set_tooltip_text("Volume")
         scale.set_value(node.volume if node.volume is not None else 1.0)
-        name = node.name
+        # Sinks are tracked by name (their ids change if they're recreated);
+        # app streams by id, since several can share a name.
+        name = node.name if node.media_class == "Audio/Sink" else f"#{node.id}"
         pending = {"src": 0}
 
         def changed(s):
@@ -364,7 +366,7 @@ class Window(Adw.ApplicationWindow):
 
             def apply():
                 pending["src"] = 0
-                n = self.graph.node_by_name(name) if self.graph else None
+                n = self.volume_node(name)
                 if n:
                     run_bg(pw.set_volume, n.id, s.get_value())
                 return False
@@ -375,13 +377,20 @@ class Window(Adw.ApplicationWindow):
         self.volume_scales[name] = scale
         return scale
 
+    def volume_node(self, key: str) -> pw.Node | None:
+        if not self.graph:
+            return None
+        if key.startswith("#"):
+            return self.graph.nodes.get(int(key[1:]))
+        return self.graph.node_by_name(key)
+
     def update_live(self):
         self.updating = True
         try:
             for name, scale in self.volume_scales.items():
                 if time.monotonic() - self.volume_touched.get(name, 0) < 2.5:
                     continue
-                n = self.graph.node_by_name(name)
+                n = self.volume_node(name)
                 if n and n.volume is not None and abs(scale.get_value() - n.volume) > 0.005:
                     scale.set_value(n.volume)
         finally:
@@ -578,6 +587,9 @@ class Window(Adw.ApplicationWindow):
 
             row = ActionRow(title=p["name"], subtitle=f"Left: {side(p['left'])} · Right: {side(p['right'])}")
             row.add_prefix(Gtk.Image(icon_name="media-playlist-consecutive-symbolic"))
+            pair_node = g.outputs().get(config.PAIR_OUTPUT_PREFIX + p["id"])
+            if pair_node is not None:
+                row.add_suffix(self.volume_scale(pair_node))
             swap = Gtk.Button(icon_name="object-flip-horizontal-symbolic", tooltip_text="Swap Left and Right", valign=Gtk.Align.CENTER)
             swap.add_css_class("flat")
             swap.connect("clicked", lambda *_, p=p: self.swap_pair(p))
@@ -692,6 +704,10 @@ class Window(Adw.ApplicationWindow):
             )
             icon = s.props.get("application.icon-name") or "audio-x-generic-symbolic"
             row.add_prefix(Gtk.Image(icon_name=icon, pixel_size=24))
+            vol = self.volume_scale(s)
+            vol.set_tooltip_text("App volume")
+            vol.set_size_request(110, -1)
+            row.add_suffix(vol)
             row.connect("notify::selected", lambda r, _p, sid=s.id: self.route(sid, choices[r.get_selected()][0]))
             group.add(row)
 
