@@ -51,6 +51,26 @@ def find(items: list, item_id: str) -> dict | None:
     return next((i for i in items if i.get("id") == item_id), None)
 
 
+PAIR_OUTPUT_PREFIX = "pair-"
+
+
+def all_outputs(cfg: dict) -> list[dict]:
+    """User outputs plus one implicit output per stereo pair.
+
+    Every pair gets its own sound device, so it can be picked directly in
+    Sound Settings or the Apps tab without first adding it to an output.
+    """
+    implicit = [
+        {
+            "id": PAIR_OUTPUT_PREFIX + p["id"],
+            "name": p["name"],
+            "members": [{"type": "pair", "ref": p["id"]}],
+        }
+        for p in cfg["pairs"]
+    ]
+    return list(cfg["outputs"]) + implicit
+
+
 def flatten_members(cfg: dict, output: dict) -> list[tuple[str, str]]:
     """Expand an output's members into (speaker key, role) tuples.
 

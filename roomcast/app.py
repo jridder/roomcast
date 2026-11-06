@@ -589,6 +589,10 @@ class Window(Adw.ApplicationWindow):
             n = outputs.get(out["id"])
             if n:
                 choices.append((n.name, out["name"]))
+        for p in self.cfg["pairs"]:
+            n = outputs.get(config.PAIR_OUTPUT_PREFIX + p["id"])
+            if n:
+                choices.append((n.name, f"{p['name']} (stereo pair)"))
         for n in sorted(g.local_sinks(), key=lambda n: n.description):
             choices.append((n.name, n.description))
         for spk in sorted(g.speakers().values(), key=lambda s: s.name):
@@ -720,7 +724,7 @@ class Window(Adw.ApplicationWindow):
             self.cfg["pairs"].append(pair)
         pair.update(name=name, left=left, right=right)
         self.save()
-        self.toast(f"Pair “{name}” saved. Tick it in an output to play to it.")
+        self.toast(f"Pair “{name}” saved. It shows up as a sound device in a few seconds.")
 
     def swap_pair(self, p):
         p["left"], p["right"] = p["right"], p["left"]

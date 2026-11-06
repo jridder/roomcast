@@ -103,7 +103,7 @@ class Daemon:
     def reconcile(self, g: pw.Graph) -> bool:
         """Make the graph match the config. Returns True if anything changed."""
         changed = False
-        wanted = {o["id"]: o for o in self.cfg["outputs"]}
+        wanted = {o["id"]: o for o in config.all_outputs(self.cfg)}
         existing = g.outputs()
 
         for oid, node in existing.items():
